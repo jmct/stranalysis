@@ -1,0 +1,17 @@
+
+Purity alone is of huge benefit when dealing with parallelism. Because
+functions do not rely on anything but their arguments, the only necessary communication
+between threads is the result of the thread's computation, which is
+shared via the program's graph using the same mechanism used to implement
+laziness \citep{SPJ:PIFPL}.
+
+Laziness, while forcing the programmer to be pure (a boon to parallelism), is
+an inherently sequential evaluation strategy. Lazy evaluation only evaluates
+expressions when they are \emph{needed}. This is what allows the use of
+infinite data structures; only what is needed will be computed.
+
+This tension between the call-by-need convention of laziness with parallelism's
+desire to evaluate expressions \emph{before} they are needed is well known
+\citep{tremblay1995impact}. The most successful method of combating this tension
+is through the use of \emph{strictness analysis} \citep{mycroft1980theory,
+wadler1987projections, hinze1995projection}.

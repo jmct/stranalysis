@@ -1,0 +1,28 @@
+This chapter explored the most common static analyses used for strictness
+analysis.  Because the initial placement of parallelism is crucial to our
+technique we explored each possible analysis in depth, highlighting the
+drawbacks of the two-point and four-point analyses. While projection-based
+analysis is significantly more complex, its ability to determine the strictness
+properties of functions based on the \emph{demand} placed on their results
+provides too many benefits to ignore.
+
+Many of the previous attempts and using strictness analysis for implicit
+parallelism used the four-point analysis. Combined with \emph{evaluation
+transformers} (discussed in the next section) the four-point analysis is able
+to identify a significant amount of parallelism. Unfortunately, the analysis is
+limited to functions on lists, which while ubiquitous, significantly restricts
+the potential of identifying parallelism in more complex programs.
+
+The projection-based analysis not only provides more insight into functions
+like \<append\>, as discussed in Section \ref{sec:projSem}, but it also allows
+us to determine a useful set of strictness properties for functions on
+arbitrary types. This greatly expands the applicability of the strictness
+analysis for finding potential parallelism.
+
+The major drawback of Hinze's projection-based analysis is that we, as compiler
+writers, no longer know in advance the set of demands our analysis will return.
+With the four-point analysis we can hard-code the parallel Strategies that
+correspond to each of the points in the domain. If we expand our analysis to
+include pairs, we can again add the corresponding strategies. With the
+projection-based analysis we no longer have that foresight. This is the issue
+we address in the next chapter.

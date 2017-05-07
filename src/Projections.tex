@@ -1,0 +1,515 @@
+The shortcomings of the analyses based on the abstract interpretation of
+programs motivated Wadler and Hughes to propose using \emph{projections} from
+domain theory to analyse strictness \citep{wadler1987projections}.
+
+For our purposes projection-based analysis provides two benefits over abstract
+interpretation: simple formulation of domains to analyse functions over
+arbitrary structures, and a correspondence with parallel strategies
+\citep{marlow2010seq, strategies}. This allows us to use the projections
+provided by our analysis to produce an appropriate function to compute the
+strict arguments in parallel.
+
+We can frame the differences in the two approaches by thinking about what each
+analysis is answering. Strictness analysis by abstract interpretation asks
+``When passing $\bot$ as an argument, is the result of the function call
+$\bot$?''. Projection-based strictness analysis instead asks ``If there is a
+certain degree of demand on the result of this function, what degree of demand
+is there on its arguments?''.
+
+What is meant by `demand'? As an example, the function \<length\> requires
+that the input list be finite, but no more. We can therefore say that
+\<length\> \emph{demands} the spine of the argument list. The function
+\<append\> is a more interesting example:
+
+\begin{haskell*}
+append &::& [\hasalpha] \to [\hasalpha] \to [\hasalpha] \\
+append []     ys &=& ys \\
+append (x:xs) ys &=& x : append xs ys
+\end{haskell*}
+
+As mentioned in the previous section the first argument must be defined to the
+first cons, but we cannot know whether the second argument is ever needed.
+However, what if the calling context of \<append\> requires the \emph{result}
+of \<append\> to be a finite list?  For example:
+
+\begin{haskell*}
+lengthOfBoth &::& [\hasalpha] \to [\hasalpha] \to Int \\
+lengthOfBoth xs ys &=& length (append xs ys)
+\end{haskell*}
+
+In this case \emph{both} arguments to \<append\> must be finite. Projections
+can be used to formalise this type of context \citep{wadler1987projections,
+hinze1995projection}, which we call a \emph{demand context}.
+
+\defineword{Demand Context}
+           {The depth of a structure that is needed by the consumer of a
+            function's result.}
+
+Demand Contexts allow us to reason about the various \emph{uses} of a
+function's result, letting us reason about functions like \<append\> more
+accurately. This, combined with their ability to analyse functions of arbitrary
+types without the need to design abstract domains by hand, make
+projection-based analysis the most realistic for our purposes of utilising
+implicit parallelism.
+
+\subsection{Semantics of Projections}
+\label{sec:projSem}
+
+Given a domain $D$, a projection on $D$ is a continuous function
+$\pi \ : \ D \rightarrow D$ that satisfies
+
+\begin{align}
+\pi \sqsubseteq ID \\
+\pi \circ \pi = \pi
+\end{align}
+
+Equation (2) ensures that a projection can not add any information to a value,
+i.e. all projections approximate the identity function. Idempotence (3) ensures
+that projecting the same demand twice on a value has no additional effect. This
+aligns with our intuition of demand. If we demand that a list is spine-strict,
+demanding spine-strictness again does not change the demand on the list.
+
+Because we want the introduction of parallelism to be semantics-preserving we
+use the following safety condition for projections:
+
+\begin{equation}
+\gamma \ \circ \ f = \gamma \ \circ \ f \ \circ \ \pi
+\end{equation}
+
+Given a function $f \ : X \rightarrow Y$, and demand $\gamma$ on the
+\emph{result} of $f$ we wish to find a safe $\pi$ such that the equality in
+Equation (4) remains true. Projection-based analysis propagates the demand
+given by $\gamma$ to the arguments of $f$. This results in the demand on the
+\emph{arguments} of $f$ given by $\pi$.  The analysis aims to find the
+\emph{smallest} $\pi$ for each $\gamma$, but approximating towards $ID$ (as it
+is always safe to project the identity).
+
+\paragraph{Demands on Primitives}
+On unlifted base types, such as unboxed integers, there are two demands,
+$ID$ and $BOT$, with the following semantics
+
+
+\begin{align}
+ID \ x \ &= \ x \\
+BOT \ x \ &= \ \bot
+\end{align}
+
+
+When an expression is in a $BOT$ context it means that non-termination is
+inevitable. You can safely evaluate an expression in this context because there
+is no danger of \emph{introducing} non-termination that is not already present.
+
+\paragraph{Demands on Lifted Types} Haskell's non-strict semantics means that
+most types we encounter are \emph{lifted} types.  Lifted types represent
+possibly unevaluated values. Given a demand $\pi$ on $D$, we can form two
+possible demands on $D_{\bot}$, $\pi!$ and $\pi?$; strict lift and lazy lift
+respectively. To paraphrase Kubiak et al.: $\pi!$ means we will definitely need
+the value demanded by this projection, and we will need $\pi$'s worth of it
+\citep{kubiak}. $\pi?$ does not tell us whether we need the value or not, but if
+we \emph{do} need the value, we will need it to satisfy $\pi$'s demand.
+
+\paragraph{Demands on Products} A projection representing a demand on a product
+can be formed by using the $\otimes$ operator with the following semantics
+
+\begin{align*}
+\langle \pi_{1} \otimes \dots \otimes \pi_{n} \rangle \ \bot &= \bot \\
+\langle \pi_{1} \otimes \dots \otimes \pi_{n} \rangle \ 
+\langle x_{1}, \dots, x_{n} \rangle &= \langle \pi_{1} x_{1}, \dots, \pi_{n} x_{n} \rangle
+\end{align*}
+
+\paragraph{Demands on Sums} If projections are functions on a domain, then
+\nolinebreak $|$, the operator that forms projections on sum types performs the
+case-analysis. Each summand is tagged with the constructor it corresponds to.
+Sometimes we will omit the constructor name when presenting projections on
+types with a single summand (such as anonymous tuples).
+
+\begin{align*}
+[True\ ID | False\ BOT]  \ True &= True \\
+[True\ ID | False\ BOT] \ False &= \bot
+\end{align*}
+
+\begin{figure}
+\begin{align*}
+    \pi ::=&\ BOT              & \text{Bottom (hyperstrict)} \\
+        |&\ ID               & \text{Top (the identity)} \\
+        |&\ \langle \pi_{1} \otimes \pi_{2} \dots \otimes \pi_{n} \rangle   & \text{Products} \\ 
+        |&\ [C_{1} \ \pi_{1} | C_{2} \ \pi_{2} \dots | C_{n} \ \pi_{n}]    & \text{Sums} \\ 
+        |&\ \mu\beta . \pi     & \text{Recursive Demands} \\
+        |&\ \beta              & \text{Recursive Binding} \\
+        |&\ \pi?               & \text{Strict Lift} \\
+        |&\ \pi!               & \text{Lazy Lift}
+\end{align*}
+\caption{Abstract Syntax for Contexts of Demand}
+\label{fig:ContextAST}
+\end{figure}
+
+
+Figure \ref{fig:ContextAST} \todo{Add CVars and CRec to AST} presents a
+suitable abstract syntax for projections representing demand.  This form was
+introduced by Kubiak et al.\ and used in Hinze's work on projection-based
+analyses \citep{kubiak, hinze1995projection}.  We have omitted the details on
+the representation of context variables (for polymorphic demands). For a
+comprehensive discussion we suggest Chapter 6 of Hinze's dissertation
+\citep{hinze1995projection}.
+
+In short, projections representing demand give us information about how defined
+a value must be to satisfy a function's demand on that value. Knowing that a
+value is definitely needed, and to what degree, allows us to evaluate the value
+before entering the function.
+
+\subsection*{Example Projections}
+
+Because our primitive values can be modelled by a flat domain (just $ID$ and
+$BOT$), our lattice of projections corresponds with the two-point domain used
+in abstract interpretation.
+
+\hfill$\Box$
+
+For pairs of primitive values, possible contexts include:
+\begin{align}
+[\langle ID? \otimes ID? \rangle] \label{IDPairs} \\
+[\langle ID! \otimes ID? \rangle] \label{FSTPairs}
+\end{align}
+
+
+As Haskell's types are sums of products, pairs are treated as sums with only
+one constructor.  For product types each member of the product is lifted.
+Context \ref{IDPairs} is the top of the lattice for pairs, accepting all
+possible pairs. Context \ref{FSTPairs} requires that the first member be
+defined but does not require the second element. This is the demand that
+\<fst\> places on its argument.
+
+\hfill$\Box$
+
+For polymorphic lists there are 7 principal contexts\footnote{All possible
+demands on polymorphic lists are instances of one of the 7 principal contexts.}
+\citep{hinze1995projection}; 3 commonly occurring contexts are:
+
+\begin{align}
+    \mu\beta.&[Nil\ ID | Cons\ \langle \gamma? \otimes \beta?\rangle] \label{IDList} \\
+    \mu\beta.&[Nil\ ID | Cons\ \langle \gamma? \otimes \beta!\rangle] \label{FINList} \\
+    \mu\beta.&[Nil\ ID | Cons\ \langle \gamma! \otimes \beta!\rangle] \label{FULLList}
+\end{align}
+
+
+Here $\mu$ binds the name for the `recursive call' of the projection and
+$\gamma$ is used to represent an appropriate demand for the element type of the
+list.  An important point is that this representation for recursive contexts
+restricts the representable contexts to \emph{uniform projections}: projections
+that define the same degree of evaluation on each of their recursive components
+as they do on the structure as a whole. The detailed reason for this
+restriction is given on page 89 of \cite{hinze1995projection}. This limitation
+does not hinder the analysis significantly as many functions on recursive
+structures are themselves uniform.
+
+With this in mind, Context \ref{IDList} represents a lazy demand on the list,
+Context \ref{FINList} represents a \emph{tail strict} demand, and Context
+\ref{FULLList} represents a \emph{head and tail} strict demand on the list.
+
+\hfill$\Box$
+
+It will be useful to have abbreviations for a few of the contexts on lists. These
+abbreviations are presented in Figure \ref{fig:listContexts}.
+
+\begin{figure}[t]
+\begin{itemize}
+    \item[] \<ID\>: accepts all lists
+    \item[] \<T\> (tail strict): accepts all finite lists
+    \item[] \<H\> (head strict): accepts lists where the head is defined
+    \item[] \<HT\>: accepts finite lists where every member is defined
+\end{itemize}
+\caption[Projections for the 4-point Domain]{Four contexts on lists as described in \citep{wadler1987projections}.}
+\label{fig:listContexts}
+\end{figure}
+
+We can now say more about the strictness properties of \<append\>. The
+strictness properties of a function are presented as a \emph{context
+transformer} \citep{hinze1995projection}. 
+
+\begin{align*}
+    &append(ID) &\rightarrow &&ID!&;ID? \\
+    &append(T)  &\rightarrow &&T!&;T! \\
+    &append(H)  &\rightarrow &&H!&;H? \\
+    &append(HT) &\rightarrow &&HT!&;HT!
+\end{align*}
+
+This can be read as ``If the demand on the result of \<append\> is $ID$
+then the first argument is strict with the demand $ID$ and the second
+argument is lazy, but if it \emph{is} needed, it is with demand $ID$.
+
+\hfill$\Box$
+
+Following Hinze \citep{hinze1995projection} we construct projections
+for every user-defined type. Each projection represents a
+specific strategy for evaluating the structure, as we shall define in section
+\ref{sec:derivation}. This provides us with the ability to generate
+appropriate parallel strategies for arbitrary types.
+
+\subsection{Lattice of Projections}
+
+Having an intuition  of what projections are we can now define how we combine
+differing demands on values. In the previous analyses we used the \meet and
+\join operations directly. Projections also have \meet and \join, but because
+our projections are representing demand contexts we do not actually want to use
+\meet. Instead we use $\pmeet$, where $\alpha\ \pmeet\ \gamma$ represents the
+\emph{joint} demand of both $\alpha$'s and $\gamma$'s demand taken together. In
+other words, the projection $\alpha\ \pmeet\ \gamma$ only accepts values that
+are accepted by $\alpha$ and $\gamma$, and returns $\bot$ otherwise (motivating
+the use of `conjunction' to describe the operation). Using $\pmeet$ instead of
+$\sqcap$ is standard when dealing with projections that act on demands
+\citep{wadler1987projections, hinze1995projection, SergeyDemand}.
+
+Figure \ref{fig:conjDisBasic} shows the rules for performing conjunction and
+disjunction of projections on basic values (either $BOT$ or $ID$) and for
+lifted values. Note that when we perform $\pmeet$ on two projections with
+different lifts we must ensure that the resulting projection is not more strict
+than the strictly lifted input, this ensures that we maintain our desired safety
+condition.
+
+\begin{figure}
+\begin{multicols}{2}
+\noindent
+
+\begin{align*}
+BOT       &\pmeet  \gamma        &=&\quad BOT \\
+\gamma    &\pmeet  BOT           &=&\quad BOT \\
+ID        &\pmeet  ID            &=&\quad ID \\
+\quad &\             &\ &  \\
+\alpha!        &\pmeet  \gamma!  &=&\quad (\alpha \pmeet \gamma)! \\
+\alpha!        &\pmeet  \gamma?  &=&\quad (\alpha \sqcup \alpha \pmeet \gamma)! \\
+\alpha?        &\pmeet  \gamma!  &=&\quad (\alpha \pmeet \gamma \sqcup \gamma)! \\
+\alpha?        &\pmeet  \gamma?  &=&\quad (\alpha \sqcup \gamma)?
+\end{align*}% what?
+
+\begin{align*}
+BOT            &\sqcup\  \gamma   &=&\quad \gamma \\
+\gamma         &\sqcup\  BOT      &=&\quad \gamma \\
+ID             &\sqcup\  ID       &=&\quad ID \\
+\quad \ \quad  &                  &\ & \\
+\alpha!        &\sqcup\  \gamma!  &=&\quad (\alpha \sqcup \gamma)! \\
+\alpha!        &\sqcup\  \gamma?  &=&\quad (\alpha \sqcup \gamma)? \\
+\alpha?        &\sqcup\  \gamma!  &=&\quad (\alpha \sqcup \gamma)? \\
+\alpha?        &\sqcup\  \gamma?  &=&\quad (\alpha \sqcup \gamma)?
+\end{align*}
+\end{multicols}
+\caption[Conjunction and Disjunction for Projections 1]{Conjunction $\pmeet$ and Disjunction $\sqcup$ for Projections on Basic and Lifted Values}
+\label{fig:conjDisBasic}
+\end{figure}
+
+Figure \ref{fig:conjDisSum} shows the same operations for projections on sum
+and product types. The only surprising aspect of the definitions is that we are
+forced to normalise the result of a conjunction on product types. This is
+because it possible for $\pmeet$ to form a projection denoting $BOT$ even when
+both arguments are not $BOT$. For example, applying $\&$ to a projection that
+only accepts $True$ and a projection that only accepts $False$ results in the
+$BOT$ projection. This is because there is no possible Boolean value that the
+resulting projection will accept, despite neither constituent projection
+denoting $BOT$.
+
+The \<norm\> function recognises these projections and transforms them to the
+direct representation of $BOT$.\footnote{$norm$ is defined in
+\cite{hinze1995projection} Section 6.3.}
+
+\subsection{Recursive Types}
+
+\begin{figure}
+\noindent
+
+\begin{align*}
+[C_{1} \alpha_{1} | \dots | C_{n} \alpha_{n}] \pmeet& [C_{1} \gamma_{1} | \dots | C_{n} \gamma_{n}] \\
+    & \quad = [C_{1} (\alpha_{1} \pmeet \gamma_{1}) | \dots | C_{n} (\alpha_{n} \pmeet \gamma_{n})] \\
+[C_{1} \alpha_{1} | \dots | C_{n} \alpha_{n}] \sqcup& [C_{1} \gamma_{1} | \dots | C_{n} \gamma_{n}] \\
+    & \quad = [C_{1} (\alpha_{1} \sqcup \gamma_{1}) | \dots | C_{n} (\alpha_{n} \sqcup \gamma_{n})]
+\end{align*}% what
+
+\begin{align*}
+\langle \alpha_{1} \otimes \dots \otimes \alpha_{n} \rangle \pmeet& \langle \gamma_{1} \otimes \dots \otimes \gamma_{n} \rangle \\
+    & \quad = norm \big( \langle (\alpha_{1} \pmeet \gamma_{1}) \otimes \dots \otimes (\alpha_{n} \pmeet \gamma_{n})\rangle \big) \\
+\langle \alpha_{1} \otimes \dots \otimes \alpha_{n} \rangle \sqcup& \langle \gamma_{1} \otimes \dots \otimes \gamma_{n} \rangle \\
+    & \quad = \langle (\alpha_{1} \sqcup \gamma_{1}) \otimes \dots \otimes (\alpha_{n} \sqcup \gamma_{n})\rangle
+\end{align*}
+\caption[Conjunction and Disjunction for Projections 2]{Conjunction and Disjunction for Projections on Products and Sums}
+\label{fig:conjDisSum}
+\end{figure}
+
+For conjunction of projections on recursive types we have to perform additional
+analysis to ensure that we maintain uniformity, which is the property that the
+demand on the `recursive call' of the type is equal to the demand on the type
+itself (as mentioned in Section \ref{sec:projSem}). The subtlety is due to the
+fact that performing conjunction on two recursive types might result in demands
+that differ on the `head' of the value from the demand on the recursive call
+\citep{kubiak, hinze1995projection}.
+
+A simple example is when we perform conjunction on the \<H\> and \<T\>
+projections on lists (from Figure \ref{fig:listContexts}). If we naively
+perform conjunction as
+\<(\hasmu\hasbeta.\hasalpha) \pmeet (\hasmu\hasbeta.\hasgamma)
+= \hasmu\hasbeta.\hasalpha \pmeet \hasgamma\>, we
+arrive at \<HT\>, while this may seem like the correct result it is actually
+unsafe! This is clear when applying these projections to the list \<xs = 1 :
+\bot : []\>
+
+\pagebreak
+
+\begin{haskell*}
+H xs  &\equiv& 1 : \_       &&\hscom{Head strictness forces the first element} \\
+T xs  &\equiv& \_ : \_ : [] &&\hscom{Tail strictness forces the spine} \\
+HT xs &\equiv& \bot         &&\hscom{\<HT\> forces all elements and the spine}
+\end{haskell*}
+
+The reason for the differing results is that \<H\> is not strict in the recursive
+part of the list, but \<T\> is, and being head strict is \emph{not} the same
+as requiring all elements of a structure, as evidenced by the following small
+program
+
+\begin{haskell*}
+f xs = a + b \hswhere{%
+                a &=&\ head xs \\
+                b &=&\ length xs
+             }
+\end{haskell*}
+
+The demand on the input list \<xs\> is the conjunction of the demands for
+\<head\> and \<length\> but it is clear to see that \<f\> does not require its
+input list to be fully defined, making it unsafe for \<H \pmeet T\> to result
+in \<HT\>.
+
+\hfill$\Box$
+
+
+The simplest way to maintain uniformity is to take the least upper bound
+($\sqcup$) of the two projections.  However, this would be too conservative and
+we would lose out on some strictness information that is present. Fortunately,
+Hinze provides us with a method that allows us to use more accurate
+approximations when it is safe to do so, relying on \join only when necessary
+(the last guard in Figure \ref{fig:conjRec}). The idea is to use versions of
+$\sqcup$ and $\pmeet$ that ignore all demands except those on the recursive
+calls; these are written as $\sqcup'$ and $\pmeet'$. We then see where in the
+lattice the result (\<conj\>) resides, performing the corresponding
+approximation, defaulting to the always safe \<\hasmu\hasbeta.\hasalpha \sqcup
+\hasgamma\>. For details on how this method was derived and a proof of its
+safety, see \cite{hinze1995projection} Section 6.4.
+
+\begin{figure}
+\begin{haskell*}
+(\hasmu\hasbeta.\hasalpha) \sqcup& (\hasmu\hasbeta.\hasgamma) &&= \quad \hasmu\hasbeta.\hasalpha \sqcup \hasgamma &&\ \\
+(\hasmu\hasbeta.\hasalpha) \pmeet& (\hasmu\hasbeta.\hasgamma) &&| \quad conj \sqsubseteq \hasbeta_{1} \pmeet' \hasbeta_{2} &&= norm \big(\hasmu\hasbeta.\hasalpha \pmeet \hasgamma \big) \\
+\quad                   &   \               &&| \quad conj \sqsubseteq \hasbeta_{1} \sqcup' \hasbeta_{1} \pmeet' \hasbeta_{2} &&= \hasmu\hasbeta.\hasalpha \sqcup \hasalpha \pmeet \hasgamma \\
+\quad                   &   \               &&| \quad conj \sqsubseteq \hasbeta_{1} \pmeet' \hasbeta_{2} \sqcup' \hasbeta_{2} &&= \hasmu\hasbeta.\hasalpha \pmeet \hasgamma \sqcup \hasgamma \\
+\quad                   &   \               &&| \quad conj \sqsubseteq \hasbeta_{1} \sqcup' \hasbeta_{2} &&= \hasmu\hasbeta.\hasalpha \sqcup \hasgamma
+\hswhere{%
+    conj &= (norm(\hasalpha[\hasbeta \mapsto \hasbeta_{1}])) \pmeet' (norm(\hasgamma[\hasbeta \mapsto \hasbeta_{2}])) \\
+    }
+\end{haskell*}
+\caption[Conjunction and Disjunction for Projections 3]{Conjunction and Disjuntion for Projections on Recursive Types}
+\label{fig:conjRec}
+\end{figure}
+
+\subsection{Projection-based Strictness Analysis}
+
+We are now able to present the analysis itself. Being a backward analysis means
+that the \emph{result} of our analysis is an environment that maps variables to
+demand contexts on those variables. Disjunction and conjunction on these
+environments simply performs the operations on the elements in the environment
+with the same key. If a key is not present in an environment it is equivalent
+to having the lazy demand (top of the demand context lattice for its type).
+
+In order to understand the rules in Figure \ref{fig:projAnal} we must
+introduce a few small operators. The $\downarrow$ operator takes a projection on sum types
+and a constructor tag and returns the projection corresponding to that constructor:
+
+\begin{haskell*}
+[C_{1} \hasalpha_{1} | \dots | C_{i} \hasalpha_{i} | \dots | C_{n} \hasalpha_{n}] \downarrow C_{i} = \hasalpha_{i}
+\end{haskell*}
+
+The $\uparrow$ operator performs the dual operation, injecting a projection on
+one constructor into a projection on the corresponding sum type. In the
+equation below $BOT?$ (also known as the \emph{absent} demand) represents the
+lazy lift of the bottom projection for the corresponding sum type:
+
+\begin{haskell*}
+C_{i} \uparrow \haspi = [C_{1} BOT? | \dots | C_{i} \haspi | \dots | C_{n} BOT?]
+\end{haskell*}
+
+When analysing expressions wrapped in \<Freeze\> we have to be careful because
+any demands that originate from suspended values are not \emph{strict} demands.
+The \emph{guard} (\<\rhd\>) operator accomplishes this:
+
+\begin{haskell*}
+! &\rhd \haspi &= \haspi \\
+? &\rhd \haspi &= \haspi \sqcup abs(typeOf(\haspi))
+\end{haskell*}
+
+The \<abs(typeOf(\haspi))\> above gets the absent demand for the corresponding
+type of the projection \<\haspi\>.
+
+The \<wrap\> and \<unwrap\> functions ensure that we handle recursive types
+appropriately. \<unwrap\> is used to `unwrap' the recursive knot one level,
+so that
+
+\begin{haskell*}
+unwrap \hasalpha@(\hasmu\hasbeta.[Nil \haspi_{1} | Cons \langle \haspi_{2} \otimes \hasbeta_{\ell} \rangle]) =\hsbody{%
+    [Nil \haspi_{1} | Cons \langle \haspi_{2} \otimes \hasalpha_{\ell} \rangle]
+    }
+\end{haskell*}
+
+\<wrap\> is the inverse operation, retying the recursive knot \citep[pg. 117]{hinze1995projection}.
+
+Lastly, \<getProd\> takes a list of identifiers and a projection environment and returns the
+projection on the product made up by those identifiers.
+
+\begin{figure}
+\begin{haskell*}
+\hsnoalign{\mathcal{P} :: Exp \to FunEnv^{\#} \to Context \to Env^{\#}}\\
+%
+\mathcal{P}\Sem{Var v} \hasphi \haspi &=& \left\{v \mapsto \haspi\right\} \\
+%
+\mathcal{P}\Sem{Int i} \hasphi \haspi &=& \emptyset \\
+%
+\mathcal{P}\Sem{Con c} \hasphi \haspi &=& \emptyset \\
+%
+\mathcal{P}\Sem{Freeze e} \hasphi \haspi_{\ell} &=& \ell \rhd \mathcal{P}\Sem{e} \hasphi \haspi\\
+%
+\mathcal{P}\Sem{Unfreeze e} \hasphi \haspi &=& \mathcal{P}\Sem{e} \hasphi \haspi! \\
+% The hsbody below requires manual spacing... TODO check out why
+\mathcal{P}\Sem{App (Con c) as} \hasphi \haspi &\ &
+    \hsbody{%
+    \quad \quad &\mid null\ as   &= \emptyset \\
+    \quad \quad &\mid otherwise  &= overList\ \hasphi\ (unwrap(\haspi) \downarrow c)\ as
+    }\\
+%
+\mathcal{P}\Sem{App (Fun f) as} \hasphi \haspi &\ &
+    \hsbody{%
+    \quad \quad &\mid null\ as   &= \emptyset \\
+    \quad \quad &\mid otherwise  &= overList\ \hasphi\ (\hasphi\ f\ \haspi)\ as
+    }\\
+%
+\mathcal{P}\Sem{Let b = e_{1} in e} \hasphi \haspi &=& env
+    \hswhere{%
+    \ \hasrho  &= \mathcal{P}\Sem{e} \hasphi \haspi \\
+    \ \hasrho' &= \hasrho \setminus \left\{b\right\} \\
+    \ env   &= \hskwd{case} lookup b \hasrho \hskwd{of} \hsbody{%
+                                    \phantom{env = case lo} Nothing &\to \hasrho' \\
+                                    \phantom{env = case lo} Just \hasgamma_{\ell}  &\to \hasrho' \pmeet (\ell \rhd \mathcal{P}\Sem{e_{1}} \hasphi \hasgamma)
+                                    }
+    }
+%
+\hsnoalign{\mathcal{P}\Sem{Case\ e\ [C_{1}\ cs_{1} \to e_{1},\ \dots C_{n}\ cs_{n} \to e_{n}]}\ \hasphi\ \haspi
+    \hsbody{%
+    \phantom{\mathcal{P}\Sem{Let b = e_{1} in e} \hasphi \haspi\ \ \ } &=&\  \hasrho'_{1} \pmeet \mathcal{P}\Sem{e} \hasphi (wrap (C_{1} \uparrow \haspi_{1})) \\
+    \          &\ &\  \sqcup \dots \sqcup \\
+    \          &\ &\  \hasrho'_{n} \pmeet \mathcal{P}\Sem{e} \hasphi (wrap (C_{n} \uparrow \haspi_{n}))
+    \hswhere{%
+    \ \hasrho_{1} &=& \mathcal{P}\Sem{e_{1}}\ \hasphi\ \haspi \\
+    \ &\vdots & \ \\
+    \ \hasrho_{n} &=& \mathcal{P}\Sem{e_{n}}\ \hasphi\ \haspi \\
+    \ \quad &\ & \ \\
+    \ (\hasrho'_{1}, \haspi_{1}) &=&\ (\hasrho_{1} \setminus cs_{1},\ getProd\ cs_{1}\ \hasrho_{1}) \\
+    \ &\vdots & \ \\
+    \ (\hasrho'_{n}, \haspi_{n}) &=&\ (\hasrho_{n} \setminus cs_{n},\ getProd\ cs_{n}\ \hasrho_{n})
+    }
+    }} \\
+\end{haskell*}
+\caption{Projection-based Strictness Analysis}
+\label{fig:projAnal}
+\end{figure}

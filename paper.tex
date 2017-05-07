@@ -1,0 +1,163 @@
+%\documentclass[justified, twoside, a4paper, symmetric]{tufte-book}
+\documentclass{jfp1}
+
+\title{Known When It's Now or Never}
+
+\author{Jos\'{e} Manuel Calder\'{o}n Trilla}
+
+
+%%%% TODO Package %%%% 
+\usepackage[disable,prependcaption,textsize=small]{todonotes}
+
+%\usepackage{amsmath}
+\usepackage{xargs}
+\usepackage{url}
+
+\usepackage{tikz}
+
+\usepackage{csquotes}
+
+
+\def \hasalpha {\(\alpha\)}
+\def \hasbeta {\(\beta\)}
+\def \hasgamma {\(\gamma\)}
+\def \hasmu {\(\mu\)}
+\def \hasphi {\(\phi\)}
+\def \haspi {\(\pi\)}
+\def \hasrho {\(\rho\)}
+\def \haslambda {\(\lambda\)}
+
+\def \meet {\<meet\> ($\sqcap$) }
+%\def \pmeet {\bm{\&}}
+\def \join {\<join\> ($\sqcup$) }
+
+\newcommandx{\tocite}[2][1=]{\todo[linecolor=red,backgroundcolor=red!25,bordercolor=red,#1]{Cite: #2}}
+\newcommandx{\todoinline}[1]{\todo[inline]{#1}}
+\newcommandx{\todofig}[1]{\todo[inline]{Make figure: #1}}
+
+\newcommand{\pmeet}{\&}
+
+\usepackage[square]{natbib}
+
+%%%% Haskell Style by Prof. Chakravarty %%%%
+\usepackage{haskell}
+
+%This is the stuff for semantic equations%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\robustify\bfseries
+\newsavebox{\sembox}
+\newlength{\semwidth}
+\newlength{\boxwidth}
+
+\newcommand{\Sem}[1]{%
+\sbox{\sembox}{\ensuremath{#1}}%
+\settowidth{\semwidth}{\usebox{\sembox}}%
+\sbox{\sembox}{\ensuremath{\left[\usebox{\sembox}\right]}}%
+\settowidth{\boxwidth}{\usebox{\sembox}}%
+\addtolength{\boxwidth}{-\semwidth}%
+\left[\hspace{-0.3\boxwidth}%
+\usebox{\sembox}%
+\hspace{-0.3\boxwidth}\right]%
+}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% Tikz styles
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\tikzset{
+    hasse/.style={shape=circle, scale=0.35, draw}
+}
+
+\tikzset{
+    hassef/.style={fill=black, shape=circle, scale=0.35, draw}
+}
+
+\tikzset{
+    center/.style={shape=circle, scale=0.35}
+}
+
+%% Sometimes we want to give a definition; this is how we do that
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newcommand{\defineword}[2]{%
+\begin{description}%
+    \item{\textbf{#1}} \hfill \\%
+        {#2}%
+\end{description}%
+}
+
+\newcommand{\sigval}[1]{\bfseries #1}
+
+%%%% hyperref needs to be last (apparently)
+%\usepackage{hyperref}
+%
+%\hypersetup{
+% colorlinks,
+% citecolor=Red,
+% linkcolor=Black,
+% urlcolor=Blue
+%}
+
+
+% TODO get this to work with haskell style (figure 26 and 27 especially)
+%\usepackage{float} % for box around figures
+%\floatstyle{boxed}
+%\restylefloat{figure}
+
+% Compromise for the lack of above
+%\DeclareCaptionFormat{myformat}{#1#2#3\hrulefill}
+%\DeclareCaptionFormat{fnoline}{#1#2#3}
+%\captionsetup[figure]{format=myformat}
+
+\begin{document}
+
+\chapter{Finding Safe Parallelism}
+\label{chap:discovery} 
+\input{src/Preamble.tex}
+
+    \section{Original Motivation vs. Our Motivation}
+    \input{src/Motivation.tex}
+
+    \section{Overview}
+    \label{sec:strictnessOverview}
+    \input{src/Overview.tex}
+
+    \section{Two-Point Forward Analysis}
+    \label{sec:twoPoint}
+    \input{src/TwoPoint.tex}
+
+    \section{Four-Point Forward Analysis}
+    \label{sec:fourPoint}
+    \input{src/FourPoint.tex}
+
+    \section{Projection-Based Analysis}
+    \label{sec:projections}
+    \input{src/Projections.tex}
+
+    \section{Summary}
+    \label{sec:summ2}
+    \input{src/Summary.tex}
+
+% For now we aren't talking about derivin strategies
+%
+%\chapter{Derivation and Use of Parallel Strategies}
+%\label{chap:derivation}
+%\input{Deriving-Strats/Preamble.tex}
+%
+%    \section{Expressing Need, Strategically}
+%    \label{sec:expressingNeed}
+%    \input{Deriving-Strats/ExpressingNeed.tex}
+%
+%    \section{Deriving Strategies from Projections}
+%    \label{sec:derivation}
+%    \input{Deriving-Strats/StrategyDerivation.tex}
+%
+%
+%    \section{Using Derived Strategies}
+%    \label{sec:parPlacement}
+%    \input{Platform/Oracles.tex}
+    
+
+\bibliography{literature}
+\bibliographystyle{jfp}
+
+\end{document}

@@ -1,0 +1,181 @@
+Because we are working in a lazy language it is not always safe to evaluate the
+arguments to a function before we enter the body of a function. This is easy
+to see with a simple example; appending two lists:\footnote{Here we have used
+the na\"{i}ve recursive version, but any correct version of append will
+have the same strictness properties.}
+
+\begin{haskell*}
+append  &::& [\hasalpha] \to [\hasalpha] \to [\hasalpha] \\
+append [] ys &=& ys \\
+append (x:xs) ys &=& x : append xs ys
+\end{haskell*}
+
+\<append\> takes two list arguments. A central question that strictness
+analysis asks is: How \emph{defined} must the arguments be to \<append\>
+in order for \<append\> to terminate?
+
+The first hint is that \<append\> pattern matches on its first argument.
+Because the function must be able to distinguish between a \<(:)\> and a
+\<[\ ]\> we know that the first argument must be defined \emph{at least} to
+the outermost constructor. Therefore, a use of \<append\> that is passed
+$\bot$ as its first argument will result in non-termination. What about the
+second argument, \<ys\>. Determining how defined \<ys\> must be turns
+out to be impossible without taking into account the \emph{context} that
+a call to \<append\> occurs in. If the first argument is \<[\ ]\>
+then \<ys\> must be defined to WHNF. However, the \<(:)\> case
+guards the recursive call to \<append\> and, by extension, the use
+of \<ys\>.
+
+The literature on Strictness Analysis is the story of determining these
+properties in the general case. We start in Section \ref{sec:idealAnalysis} with
+exploring the simplest strictness analysis, \emph{Ideal Analysis} on \emph{flat
+domains}. We then show how the work was extended to \emph{non-flat domains} in
+Section \ref{sec:fourPoint}. Lastly, we show how the notion of \emph{contexts}
+mentioned above are formalised by the use of \emph{projections} from Domain
+Theory in section \ref{sec:projections}.
+
+
+\subsection{Ideal Strictness Analysis}
+\label{sec:idealAnalysis}
+
+If a function uses the value of an argument within its body it is safe
+to evaluate that argument before, or in parallel with, the execution of the body
+of the function. In order to determine which arguments can be evaluated in this
+way modern compilers use \emph{strictness analysis} \citep{mycroft1980theory}.
+More formally, a function $f$ of $n$ arguments
+
+$$
+    f\ x_{1} \dots \ x_{i} \ \dots x_{n} = \dots
+$$
+
+\noindent is strict in its $i$th argument if and only if
+
+$$
+    f\ x_{1} \dots \ \bot \ \dots x_{n} = \bot
+$$
+
+What this states is that $f$ is only strict in its $i$th argument if $f$
+becomes non-terminating\footnote{In this thesis we use the convention that
+$\bot$ represents erroneous or non-terminating expressions.} by passing a
+non-terminating value as its $i$th argument.
+
+Knowing the strictness information of a function is the first step in automatic
+parallelisation. This is because if $f$ is strict in its $i$th argument we do
+not risk introducing non-termination (which would not otherwise be present) by
+evaluating the $i$th argument in parallel and waiting for the result. In other
+words, evaluating $x_{i}$ in parallel would only introduce non-termination to
+the program if evaluating $f$ with $x_{i}$ would have resulted in $f$'s
+non-termination anyway.
+
+F-Lite has two primitives for taking advantage of strictness information: $par$
+and $seq$, as shown in Figure \ref{fig:seqandpar}.
+\begin{figure}
+\begin{tabular}{lll}
+    &seq \ :: \ a \rightarrow b \rightarrow b &&par \ :: \ a \rightarrow b \rightarrow b \\
+    &seq \ x \ y = y                          &&par \ x \ y = y
+\end{tabular}
+\caption[Semantics of \texttt{seq} and \texttt{par}.]{Semantics (but not the pragmatics) of \texttt{seq} and \texttt{par}.}
+\label{fig:seqandpar}
+\end{figure}
+
+Both functions return the value of their second argument. The difference is in
+their side-effects. $seq$ returns its second argument only \emph{after}
+the evaluation of its first argument. $par$ forks the evaluation of its first
+argument in a new parallel thread and then returns its second argument; this is
+known as sparking a parallel task \citep{clack1986four}.
+
+Strictness analysis was a very active research area in the 1980's and the
+development of analyses that provide the type of strictness information
+outlined above is a well understood problem \citep{mycroft1980theory,
+clack1985strictness, burn1986strictness}.  However, as suggested above,
+strictness analysis does not provide satisfactory information about complex
+data-structures \citep{wadler1987strictness}. This can be remedied by the
+use of \emph{projections} to represent \emph{demand}.
+
+\subsection{Abstract Interpretation}
+
+Mycroft introduced the use of abstract interpretation for performing strictness
+analysis on call-by-need programs over thirty years ago
+\citep{mycroft1980theory}.
+Strictness analysis as originally described by Mycroft was only capable of
+dealing with a two-point domain (values that are definitely needed, and values
+that may or may not be needed). This works well for types that can be
+represented by a flat domain (Integer, Char, Bool, etc.)\footnote{Any type that
+can be represented as an enumerated type.} but falls short on more complex data
+structures. For example, even if we find that a function is strict in a list
+argument, we can only evaluate up to the first \verb'cons' safely. For many
+functions on lists, evaluating the entire list, or the spine of the list, is
+safe; canonical examples are \verb'sum' and \verb'length'.
+
+In order to accommodate this type of reasoning, Wadler developed a
+\emph{four-point domain} for the abstract interpretation of list-processing
+programs \citep{wadler1987strictness}. However, when extended in the natural way
+for general recursive data structures, the size of the domains made finding
+fix-points prohibitively costly.
+
+\subsection{Projections and Contexts}
+\label{sec:projections}
+
+So far our discussion of strictness has only involved two levels of
+`definedness': a defined value, or $\bot$. This is the whole story when dealing
+with \emph{flat} data-structures such as Integers, Booleans or Enumerations.
+However, in lazy languages nested data-structures have \emph{degrees} of
+definedness.
+
+Take the following example function and value definitions in F-Lite
+\smallskip
+
+\begin{centering}
+\begin{BVerbatim}[commandchars=\\\{\}, codes={\catcode`$=3}]
+length []     = 0                   sum []     = 0
+length (x:xs) = 1 + length xs       sum (x:xs) = x + sum xs
+
+definedList = [1,2,3,4]             infiniteList = [1,2,3...
+
+partialList = [1,2,$\bot$,4]           loop = loop
+\end{BVerbatim}
+\end{centering}\\
+
+Both \verb-length- and \verb-sum- are functions on lists, but they use lists
+differently. \verb-length- does not use the elements of its argument list.
+Therefore \verb-length- would accept \verb-definedList- and \verb-partialList-
+(which has a non-terminating element) as arguments and still terminate.
+On the other hand \verb-sum- \emph{needs} the elements of the list,
+otherwise it would not be able to compute the sum. For this reason, \verb-sum-
+only terminates if it is passed a fully defined list and would result in
+non-termination if passed \verb-partialList-. Neither function would terminate
+if passed \verb-infiniteList-, since even \verb-length- requires the list to
+have a finite length (some functions do not require a finite list, such as
+\verb-head-, the function that returns the first element in a list). With
+these examples we say that \verb-length- \emph{demands} a finite list, whereas
+\verb-sum- \emph{demands} a fully-defined list.
+
+This additional information about a data-structure is extremely useful when
+trying to parallelise programs. If we can determine \emph{how much} of a
+structure is needed we can then evaluate the structure to that depth in
+parallel.
+
+%The first notable attempt at capturing this type of information was
+%by Wadler in 1987 \citep{wadler1987strictness}. However, his approach worked
+%well on lists but did not scale well to other, more complex data-structures.
+
+The work that introduced this representation of demands was by Wadler and
+Hughes \citep{wadler1987projections} using the idea of \emph{projections} from
+domain theory.  The technique we use in our compiler is a projection-based
+strictness analysis based on the work in Hinze's dissertation
+\citep{hinze1995projection}.  Hinze's dissertation is also a good resource for
+learning the theory of projection-based strictness analysis.
+
+
+\subsection*{Strategies}
+
+With the more sophisticated information provided by projection-based analysis,
+we require more than simply $par$ and $seq$ to force the evaluation of values.
+To this end we use the popular technique of \emph{strategies} for parallel
+evaluation \citep{strategies, marlow2010seq}. Strategies are designed to
+evaluate structures up to a certain depth in parallel with the use of those structures. Normally, strategies
+are written by the programmer for use in hand-parallelised code. In order to
+facilitate auto-parallelisation we have developed a method to \emph{derive} an
+appropriate strategy from the information provided to us by projection-based
+strictness analysis. The rules for the derivation are presented as a
+denotational semantics and will be discussed in Chapter \ref{chap:derivation}.

@@ -1,0 +1,497 @@
+As noted in the last section, two-point domains are quite limited when dealing
+with lazy structures. A more formal explanation for this limitation is that the
+two-point domain really represents reduction to WHNF or $\bot$, and nothing
+else. In the case of flat domains this is sufficient because WHNF is all there
+is. For nested data types the reality is much different. 
+
+For functions that work on lists, like \<sum\> or \<append\>, strictness up to
+WHNF is not much benefit. Strictness analysis as described in the previous
+section would be able to tell us that \<sum\> requires its argument to be
+defined, allowing us to evaluate it before entering the function (or in
+parallel). But it is only safe up to WHNF. Once the first \<Cons\> is reached
+we must stop evaluation of the list or risk introducing non-termination.
+Through the lens of implicit parallelism it seems that we are unlikely to
+benefit from introducing parallel evaluation when we are limited to
+WHNF.\footnote{Indeed most uses of the basic strictness information were for
+improving the code generation to avoid building unnecessary suspensions.} This
+is clearly a problem.
+
+The solution seems clear: we must extend the abstract domains for non-flat data
+types so that we can have more detailed strictness information. For some data
+types, extending the technique is straightforward. In F-Lite, pairs can be
+defined as follows.
+
+\begin{haskell*}
+data Pair \hasalpha \hasbeta = MkPair \hasalpha \hasbeta
+\end{haskell*}
+
+Many languages, such as Haskell, Clean, and the ML family provide the following
+syntactic sugar for pairs (and other $N$-tuples): \<(\hasalpha,\hasbeta)\>.
+
+A first try at representing pairs of values from the two-point domain could
+give us the lattice in Figure \ref{fig:unboxedPairs}.
+
+\captionsetup[figure]{format=fnoline}
+\begin{figure}
+\centering
+\begin{subfigure}{0.4\textwidth}
+\begin{tikzpicture}
+    \node [center] (cent) {};
+    \node [hasse, above = of cent, label=above:{\large\<(\(\top\),\(\top\))\>}]  (top)   {};
+    \node [hasse, left = of cent, label=left:{\large\<(\(\top\),\(\bot\))\>}]    (left)  {};
+    \node [hasse, right = of cent, label=right:{\large\<(\(\bot\),\(\top\))\>}]  (right) {};
+    \node [hasse, below = of cent, label=below:{\large\<(\(\bot\),\(\bot\))\>}] (bot)   {};
+
+    \draw[black] (top) -- (left);
+    \draw[black] (top) -- (right);
+    \draw[black] (right) -- (bot);
+    \draw[black] (left) -- (bot);
+\end{tikzpicture}
+\caption{Unlifted Pairs}
+\label{fig:unboxedPairs}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.4\textwidth}
+\begin{tikzpicture}
+    \node [center] (cent) {};
+    \node [hasse, above = of cent, label=above:{\large\<(\(\top\),\(\top\))\>}]  (top)   {};
+    \node [hasse, left = of cent, label=left:{\large\<(\(\top\),\(\bot\))\>}]    (left)  {};
+    \node [hasse, right = of cent, label=right:{\large\<(\(\bot\),\(\top\))\>}]  (right) {};
+    \node [hasse, below = of cent, label=315:{\large\<(\(\bot\),\(\bot\))\>}] (bot)   {};
+    \node [hasse, below = of bot, label=below:{\large$\bot$}] (Bot)   {};
+
+    \draw[black] (top) -- (left);
+    \draw[black] (top) -- (right);
+    \draw[black] (right) -- (bot);
+    \draw[black] (left) -- (bot);
+    \draw[black] (bot) -- (Bot);
+\end{tikzpicture}
+\caption{Lifted Pairs}
+\label{fig:boxedPairs}
+\end{subfigure}
+\caption{Domain for pairs of flat-domain values}
+\hrulefill
+\end{figure}
+\captionsetup[figure]{format=myformat}
+
+The meaning of this lattice is fairly intuitive. When we possess a pair of
+flat-domain values there are four possibilities, we can have
+
+\begin{enumerate}
+    \item The pair structure itself (\<MkPair\>), but accessing either value
+        results in non-termination
+    \item The pair structure itself, but accessing the \<fst\> element 
+        results in non-termination
+    \item The pair structure itself, but accessing the \<snd\> element
+        results in non-termination
+    \item The pair structure itself and both values are fully defined
+\end{enumerate}
+
+Notice that possibilites 2 and 3 are similar in that there are one defined and
+one undefined item in each. Suggesting that one of 2 or 3 is more defined than
+the other would make little sense.  For this reason we say that they are
+\emph{incomparable}, i.e. they are neither more nor less defined than each
+other.
+
+However, the lattice in Figure \ref{fig:unboxedPairs} is only valid for
+\emph{unlifted} pairs, where the constructor value, \<(,)\>, is always defined.
+The reality for non-strict languages is that \emph{any} value may be undefined,
+including the constructors for product types.
+
+This means that we must \emph{lift} the domain, adding a further bottom value
+that represents a failure to construct the pair's outermost constructor
+(\<MkPair\> in the F-Lite case). The result, shown in Figure
+\ref{fig:boxedPairs}, is typical of domains for strictness analysis on finite
+types. You can construct an appropriate domain assuming that the structure is
+itself defined, then lift the resulting lattice with an additional $\bot$ that
+represents a failure to construct the structure.
+
+Because this domain is still finite we are able to incorporate it into the
+framework developed by Mycroft without much issue, simply defining the
+appropriate \<meet\> and \<join\> on the lattice and the strictness properties
+for any primitives that work with pairs. The main issue is that extending the
+technique to non-flat domains in the obvious way introduces infinite domains
+for recursive types, losing a lot of the power of abstract interpretation.
+\tocite{John Hughes work on non-flat domains before wadler and mycroft's thesis
+pg 82}
+
+The first practical solution was proposed by Wadler involving a four-point
+domain for lists \citep{wadler1987strictness}. Instead of representing the
+recursive structure of lists directly, which creates an infinite domain, Wadler
+chose a domain that represents four degrees of definedness for lists.
+
+\pagebreak
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+    \node [hasse, label=above:{\large$\top_{\in}$}]                   (full)   {};
+    \node [hasse, below = of full, label=right:{\large$\bot_{\in}$}]  (finite) {};
+    \node [hasse, below = of finite, label=right:{\large$\infty$}]    (inf)    {};
+    \node [hasse, below = of inf, label=below:{\large$\bot$}]         (bot)    {};
+
+    \draw[black] (full) -- (finite);
+    \draw[black] (finite) -- (inf);
+    \draw[black] (inf) -- (bot);
+\end{tikzpicture}
+\caption{Wadler's Four-point Domain}
+\label{fig:listDomain}
+\end{figure}
+
+The result, as shown in Figure \ref{fig:listDomain}, can be described, from least
+to most defined as follows:
+
+\begin{enumerate}
+    \item $\bot$ represents all undefined lists
+    \item $\infty$ represents all undefined lists, lists  with undefined tails
+        and all infinite lists
+    \item $\bot_{\in}$ represents all of the above in addition to all finite
+        lists with at least one undefined element
+    \item $\top_{\in}$ represents fully defined lists along with all of the above
+\end{enumerate}
+
+
+Because we are now concerning ourselves with values from different domains in
+our analysis we must now know the types of expressions in our program. This
+ensures that we do not accidentally try to \<meet\> or \<join\> values from
+different domains. 
+
+\begin{figure}[b]
+\centering
+\begin{minipage}{.5\textwidth}
+\begin{haskell*}
+cons^{\#} \(\top\) \(\top_{\in}\) &=& \(\top_{\in}\) \\
+cons^{\#} \(\top\) \(\bot_{\in}\) &=& \(\bot_{\in}\) \\
+cons^{\#} \(\top\) \(\infty\)     &=& \(\infty\) \\
+cons^{\#} \(\top\) \(\bot\)       &=& \(\infty\) \\
+\end{haskell*}
+\end{minipage}
+\quad\quad
+\begin{minipage}{.5\textwidth}
+\begin{haskell*}
+cons^{\#} \(\bot\) \(\top_{\in}\) &=& \(\bot_{\in}\) \\
+cons^{\#} \(\bot\) \(\bot_{\in}\) &=& \(\bot_{\in}\) \\
+cons^{\#} \(\bot\) \(\infty\)     &=& \(\infty\) \\
+cons^{\#} \(\bot\) \(\bot\)       &=& \(\infty\)
+\end{haskell*}
+\end{minipage}
+\caption{Definition of $cons^{\#}$ for a Four-Point Domain}
+\label{fig:cons4}
+\end{figure}
+
+
+To incorporate the four-point domain into the abstract interpretation from the
+previous section we need a few new primitives. The \<Cons\> constructor is
+given the abstract definition shown in Figure \ref{fig:cons4}. \<Nil\>, being a
+fully defined list, is always abstracted as $\top_{\in}$.  There are a few
+points worth mentioning about the definition of \<cons^{\#}\>.  First, none of
+the equations result in $\bot$.  This makes sense with our understanding of
+lazy evaluation, if we have the outermost constructor we have a value in WHNF
+and therefore it is definitely \emph{not} $\bot$. Additionally, notice that
+\<cons\>ing a defined value onto $\bot_{\in}$ also results in $\bot_{\in}$,
+this keeps \<cons^{\#}\> monotonic in addition to aligning with our intuitions
+(\<cons\>ing a defined element to the beginning of a list with possibly
+undefined elements does not suddenly make the list fully defined). 
+
+We must therefore alter the $\mathcal{A}$ rules for nullary constructors and
+add a pattern for when \<Cons\> is used. The modified \<Con c\> rule and the
+new rule for \<Cons\> are shown in Figure \ref{fig:consAI}.
+
+\begin{figure}[t]
+\begin{haskell*}
+\mathcal{A}\Sem{Con c} \hasphi && \\
+\hsbody{%
+    \quad\quad  &\mid c == ``Nil'' &= \(\top_{\in}\) \\
+    \quad\quad  &\mid otherwise    &= \(\top\)
+    } \\
+%
+\mathcal{A}\Sem{App (Con ``Cons'') [x, xs]} \hasphi &=&
+        cons^{\#} (\mathcal{A}\Sem{x} \hasphi) (\mathcal{A}\Sem{xs} \hasphi)\\
+%
+\end{haskell*}
+\caption{Modification to $\mathcal{A}$ for List Constructors}
+\label{fig:consAI}
+\end{figure}
+
+In addition to \<Cons\> and \<Nil\>, we need to define new interpretations for
+\<Case\> expressions. Pattern matching on a value from the four-point domain
+will require a different interpretation than the previous section. The new
+domain introduces two problems that must be dealt with:
+
+\begin{enumerate}
+    \item Abstracting the alternatives of a \<Case\> expression naively can
+        approximate too much, making the results less effective
+    \item Choosing appropriate approximations for the bindings introduced with
+        the \<Cons\> alternative
+\end{enumerate}
+
+We will show the solutions to these obstacles one at a time.
+
+\paragraph{Problem 1:} The first point has to do with pattern matching and
+preventing the \<Nil\> alternative from weakening our approximations. For now
+we will ignore the question of how to approximate the bindings introduced with
+the \<Cons\> alternative.
+
+Take the following template for pattern matching on lists:
+
+\begin{haskell*}
+\hscase{\hsinf{a list}}{%
+    Nil       &\to \hsinf{\<Nil\> branch} \\
+    Cons x xs &\to \hsinf{\<Cons\> branch with possible occurrences of \<x\> and \<xs\>}
+    }
+\end{haskell*}
+
+If we name the \<Nil\> branch \<a^{\#}\> and treat the \<Cons\> branch as a function
+\<f^{\#}\> of \<x\> and \<xs\> we have the following form
+
+\begin{haskell*}
+\hscase{\hsinf{a list}}{%
+    Nil       &\to a^{\#} \\
+    Cons x xs &\to f^{\#} x xs
+    }
+\end{haskell*}
+
+If we were to naively use the \<Case\> rule from the previous section we
+would have\footnote{We use the notation found in \citep{turnerHistory} for
+abstracting a variable from an expression: \<[x]e\> denotes abstracting
+occurrences of \<x\> out of \<e\>. This results in a function equivalent to
+\<(\haslambda x \to e)\>.}
+
+\begin{haskell*}
+\mathcal{A}\Sem{Case xs [Nil \to e_{1}, Cons y ys \to e_{2}]} \hasphi &=&
+    xs^{\#} \(\sqcap\) (a^{\#} \(\sqcup\) f^{\#} \(\top \ \top_{\in}\))
+    \hswhere{%
+    &xs^{\#} &= \mathcal{A}\Sem{xs} \hasphi \\
+    &a^{\#}  &= \mathcal{A}\Sem{e_{1}} \hasphi \\
+    &f^{\#}  &= [ys][y](\mathcal{A}\Sem{e_{2}} \hasphi)
+    }
+\end{haskell*}
+
+The issue is that the \<meet\>ing of \<a^{\#}\> with \<f^{\#} y ys\> will often
+prevent the analysis from providing useful information. Take the function
+\<sum\> for example:
+
+\begin{haskell*}
+sum xs = \hscase{xs}{%
+    Nil       &\to 0 \\
+    Cons y ys &\to y + sum ys
+    }
+\end{haskell*}
+
+In this case, \<a^{\#}\> will always be $\top$, when we abstract the function
+to get \<xs^{\#} \(\sqcap\) (\(\top\) \(\sqcup\) f^{\#} y ys)\> the result
+would only ever be $\bot$ if \<xs \(\equiv \bot\)\>. Therefore it is only safe
+for us to evaluate the list up to WHNF, when \<sum\> clearly needs a
+fully-defined list. Moreover, because we may lack information about
+the definedness of \<xs\> we must be safe and approximate \<y\> and \<ys\> to
+the top of their lattices ($\top$ and $\top_{\in}$, respectively). 
+
+Wadler's key insight was that the use of pattern matching allowed us to retain
+information that would otherwise be lost when performing abstract
+interpretation \citep{wadler1987strictness}. Whereas in our previous abstract
+interpretation from Section \ref{sec:twoPoint} we had to \join all of the
+branches in a \<Case\> expression, we can now use the fact that we know \<Nil\>
+is always the $\top_{\in}$ value in our domain.  Why is this?  Because \<Nil\>
+is a fully defined list with \emph{no bottom elements}!
+
+This means that we only have to consider the value of \<a^{\#}\> when our
+\<Case\> expression matches on $\top_{\in}$. This prevents the definedness
+of \<a^{\#}\> from preventing more accurate approximations for when the list is
+less defined than $\top_{\in}$, solving our first issue.
+
+\paragraph{Problem 2:} The second problem was choosing appropriate approximations
+for the bindings introduced with the \<Cons\> alternative. Happily, this turns out
+to be quite easy to solve.
+
+In our two-point analysis all bindings introduced by an alternative to a
+\<Case\> expression are approximated by $\top$ because we do not `know' how to
+approximate non-flat structures. When evaluating a \<Case\> on our four-point
+domain we can use the knowledge we have of what lists each point in the domain
+corresponds to. We can use the definition of the primitive \<cons^{\#}\> as
+a lookup table, switching the right hand and left hand sides of each equation.
+This gives us the following:
+
+\begin{haskell}
+    \(\top_{\in}\) &\to& cons^{\#} \(\top\) \(\top_{\in}\)              \\  
+    \(\bot_{\in}\) &\to& (cons^{\#} \(\bot\) \(\top_{\in}\)) \(\sqcup\)
+                         (cons^{\#} \(\top\) \(\bot_{\in}\)) \(\sqcup\)
+                         (cons^{\#} \(\bot\) \(\bot_{\in}\)) \(\sqcup\) \\  
+    \(\infty\)     &\to& (cons^{\#} \(\top\) \(\infty\))     \(\sqcup\)
+                         (cons^{\#} \(\top\) \(\bot\))       \(\sqcup\)
+                         (cons^{\#} \(\bot\) \(\infty\))      \(\sqcup\)
+                         (cons^{\#} \(\bot\) \(\bot\))
+\end{haskell}
+
+The absence of a rule for $\bot$ is due to the fact that we would never match
+on an undefined value, resulting in $\bot$ regardless of the values of the
+alternatives. We can also remove several of the alternatives in the cases for
+$\infty$ and $\bot_{\in}$ due to the necessity for the abstraction of the
+alternative branches to be monotonic \citep{wadler1987strictness}.\footnote{For
+example, with \(\bot_{\in}\) we will always have \(f^{\#} \bot \bot_{\in}
+\sqsubseteq f^{\#} \top \bot_{\in}\), making \(f^{\#} \bot \bot_{\in}\)
+unnecessary since \(x \sqcup y \equiv y\) when \(x \sqsubseteq y\). Applying
+this reasoning to \(\infty\) leaves us with only \(f^{\#} \top \infty\) to
+consider.}
+
+\begin{figure}[t!]
+\begin{haskell*}
+\mathcal{A}\Sem{Case xs [Nil \to e_{1}, Cons y ys \to e_{2}]} \hasphi && \\
+\hsbody{%
+    \quad\quad &\mid xs^{\#} == \(\top_{\in}\) &= a^{\#} \(\sqcup\) f^{\#} \(\top\ \top_{\in}\) \\
+    \quad\quad &\mid xs^{\#} == \(\bot_{\in}\) &= f^{\#} \(\bot\ \top_{\in}\) \(\sqcup\) f^{\#} \(\top\ \bot_{\in}\) \\
+    \quad\quad &\mid xs^{\#} == \(\infty\)     &= f^{\#} \(\top\ \infty\)\\
+    \quad\quad &\mid otherwise                 &= \bot
+} \hswhere{%
+    &xs^{\#} &= \mathcal{A}\Sem{xs} \hasphi \\
+    &a^{\#}  &= \mathcal{A}\Sem{e_{1}} \hasphi \\
+    &f^{\#}  &= [ys][y](\mathcal{A}\Sem{e_{2}} \hasphi)
+    }
+\end{haskell*}
+\caption{Abstraction of Case Expressions on Lists}
+\label{fig:absCase}
+\end{figure}
+
+
+Taking these insights into account leaves us with the rule for
+pattern matching on lists seen if Figure \ref{fig:absCase}.
+
+\<meet\> and \<join\> are easily defined for the four-point domain. If we
+assign each point in the domain a value according to its position in the lattice,
+with $\bot$ being $0$ and $\top_{\in}$ being $3$, we can define \meet as \<min\>
+and \join as \<max\>.
+
+With everything in place, we can now determine whether an analysis using this
+four-point domain is more suitable for implicit parallelism.
+
+\subsubsection{Length and Sum}
+
+We will use the simple recursive \<length\> function for our first example of
+using this analysis (\<sum\> is defined similarly, replacing the \<1\> with
+\<y\>).
+
+\begin{haskell*}
+length xs &=& \hscase{xs}{%
+    Nil &\to 0 \\
+    Cons y ys &\to 1 + length ys
+    }
+\end{haskell*}
+
+Because \<length\> and \<sum\> take only one argument, which is a list, we must
+analyse the functions at each of the four points in our domain for lists.
+Recursion can be dealt with in the same manner as shown in Section
+\ref{sec:twoPoint}. Once a fixed-point is reached we are left with the
+following results.
+
+\begin{table}[h!]
+\centering
+\vspace{10pt}
+\begin{tabular}{c || c c}
+    $xs^{\#}$ & \<length^{\#} xs^{\#}\> & \<sum^{\#} xs^{\#}\> \\
+    \hline
+    $\top_{\#}$ & $\top$                & $\top$ \\
+    $\bot_{\#}$ & $\top$                & $\bot$ \\
+    $\infty$ & $\bot$                   & $\bot$ \\
+    $\bot$ & $\bot$                     & $\bot$
+\end{tabular}    
+\caption{Analysis of \(length^{\#}\) and \(sum^{\#}\) Using 4-point Domains}
+\label{tab:lengthSum}
+\end{table}
+
+The results in Table \ref{tab:lengthSum} are exactly what we would expect. If
+\<length\> or \<sum\> are passed infinite lists then program will result in
+non-termination. \<sum\> has the additional constraint that all \emph{elements}
+of its input list must also be defined. This analysis would allow us to
+evaluate the argument to \<sum\> fully, in parallel, making it a significant
+improvement to the simple two-point analysis from Section \ref{sec:twoPoint}.
+
+\subsubsection{Discussion of Four-Point Strictness Analysis}
+
+Because lists are one of the most common structures in functional programming,
+this development allowed strictness analysis to be useful in a wide variety of
+`real' systems. This also makes strictness analysis' use for parallelism more
+realistic. We can now tell the machine to evaluate lists in parallel up to the
+degree that it is safe to do so. Some of the more successful attempts at
+implicit parallelism were based on using this strictness information, most
+notably Burn's work on parallelisation of functional programs for a Spineless
+$G$-Machine \citep{burn1987evaluation} and the work of
+\citet{hogen1992automatic} on automatically parallelising programs for a
+distributed reduction machine.
+
+While this four-point domain made strictness analysis much more flexible it
+suffers from a few considerable shortcomings:
+
+\begin{enumerate}
+    \item An argument is only considered strict for a function if it is strict
+        in \emph{all} possible contexts\footnote{In other words, an argument
+                for a function is only strict if it is strict for all possible
+                uses of that function. We explore this further in the next
+                section.} of that function
+    \item For other structures similar domains must be \emph{designed}, i.e.
+        there does not seem to be straightforward way to derive a `good' finite
+        domain for every recursive type
+    \item Even when the compiler writer designs additional abstract domains
+        for other recursive types, the calculation of fixed points becomes
+        prohibitively expensive with more complex abstract domains
+\end{enumerate}
+
+To illustrate the first problem we can study the results of applying this
+analysis to the \<append\> function, which can be seen in Table
+\ref{tab:append}.
+
+\begin{table}[h!]
+\centering
+\vspace{10pt}
+\begin{tabular}{c c || c c c c}
+                               & \multicolumn{1}{c}{} & \multicolumn{4}{c}{$ys^{\#}$}            \\
+                               &             & $\top_{\in}$ & $\bot_{\in}$ & $\infty$ & $\bot$   \\
+    \cline{2-6}
+    \multirow{4}{*}{$xs^{\#}$} & $\top_{\#}$ & $\top_{\in}$ & $\bot_{\in}$ & $\infty$ & $\infty$ \\
+                               & $\bot_{\#}$ & $\bot_{\in}$ & $\bot_{\in}$ & $\infty$ & $\infty$ \\
+                               & $\infty$    & $\infty$     & $\infty$     & $\infty$ & $\infty$ \\
+                               & $\bot$      & $\bot$       & $\bot$       & $\bot$   & $\bot$
+\end{tabular}    
+\caption{Analysis of \(append^{\#}\ xs^{\#}\ ys^{\#}\) Using 4-point Domains}
+\label{tab:append}
+\end{table}
+
+
+We can see that while the first list is always strict up to WHNF, the second
+list is not strict. This is unfortunate because we know that \<append\> is
+strict in both arguments under certain conditions.
+
+For example, if we pass the result of \<append\> to \<length\> then we know
+that \emph{both} argument lists for \<append\> must be finite for the result
+of the call the \<length\> to terminate. The inability for this analysis
+to express that form of strictness is a major weakness.
+
+The limitations due to this first point were well known at the time of Wadler's
+paper on the four-point domain. However, the solutions seemed ad-hoc and were
+on shaky theoretical grounds \citep{hughes1986strictness, hughes1987analysing}. The
+introduction of the four-point domain was successful, in part, due to it fitting
+naturally in the strictness analysis techniques that were already understood.
+Fortunately, we have the benefit of time and work on the analysis of strictness that
+takes into account the \emph{use} of a function, using \emph{projections}, is
+much better understood \citep{hinze1995projection, SergeyDemand}.
+
+The need to design a suitable domain for each recursive type is unfortunate.
+Ideally the strictness analysis in a compiler would work on whatever types the
+programmer decides to define. Functional languages are often lauded for their
+ability to have few primitive types and allow the programmer to define their
+own `first class' types.  Having strictness analysis that only functions well
+on lists subverts this ideal, creating a leaky abstraction. Programmers will
+use lists even when inappropriate because the compiler is so much better at
+optimising them than any custom type. While not motivated by the second issue,
+projection-based analysis solves it anyway, allowing strictness analysis to be
+performed on arbitrary types with very few restrictions.
+
+As for the third shortcoming, projection-based analysis does not make
+calculating fixed points free. It does however shift the complexity of the
+analysis. Instead of being exponential in the number of arguments, it grows
+relative to the size of a function's \emph{return} type. While not a panacea in
+this regard it does make projection-based analysis practical.
+
+Overall, strictness analysis using the four-point domain is a significant
+improvement over a basic two-point domain, particularly for use in exploiting
+implicit parallelism. While having solved several of the downsides of using
+a simple two-point domain, the four-point analysis still suffers from
+significant problems when taking our use-case into account.

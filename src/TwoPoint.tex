@@ -1,0 +1,493 @@
+As mentioned in the Introduction, the majority of functional languages use
+either call-by-need or call-by-value semantics.  While call-by-need has many
+attractive properties the delaying of computation incurs an overhead cost on
+all computations. Call-by-value, by contrast, has an execution model that is
+more easily mapped to conventional hardware, allowing for simpler
+implementations that achieve good performance. Mycroft used this tension to
+motivate his development of strictness analysis \citep{mycroft1980theory}:
+
+\begin{displayquote}
+
+The above arguments suggest that call-by-value is more efficient but
+call-by-need preferable on aesthetic/definedness considerations. So techniques
+are herein developed which allow the system to present a call-by-need interface
+to the user but which performs a pre-pass on his program annotating those
+arguments which can validly be passed using call-by-value.
+
+\end{displayquote}
+
+By determining which arguments can be safely passed using call-by-value
+we diminish the overhead of call-by-need, paying the overhead of
+suspending computation only when necessary to ensure that call-by-need
+semantics are maintained.
+
+While this was the original motivation for strictness analysis it also serves
+in identifying potential parallelism in a program. When an argument is suitable
+to be passed as call-by-value it is also suitable to be evaluated in parallel.
+In this case the value is evaluated in parallel to the original thread.
+Synchronisation is accomplished via the same mechanism as
+laziness,\footnote{Remember that with the spark model of parallelism the
+synchronisation occurs via updates to the heap. When a thread begins the
+evaluation of an expression it marks the heap node as `locked', stopping any
+other thread from repeating the computation.  When the thread completes
+evaluation of the expression to WHNF, it updates the locked heap node to point
+to the result. Therefore the way threads share computation is identical to the
+way a sequential lazy evaluator shares the evaluation of expressions
+\citep{clack1986four}.} with the exception that a thread can be blocked while
+waiting for another thread to complete its evaluation.
+
+\subsection{Safety First}
+
+Strictness analysis is chiefly concerned with \emph{safety}. In order to retain
+the origin call-by-need semantics the runtime can only alter the evaluation order
+when doing so guarantees the same termination properties of the program.
+
+We will refer to this notion of safety as the \emph{strictness} properties
+of an argument. Take a function $f$ of $n$ arguments
+
+\begin{equation*}
+f \ x_{1} \ \dots x_{i} \ \dots \ x_{n} \ = \langle \texttt{function body} \rangle
+\end{equation*}
+
+The $i$th argument of $f$ is said to be strict \emph{if and only if}
+
+\begin{equation}
+f \ x_{1} \ \dots \bot_{i} \ \dots \ x_{n} \ =  \bot
+\end{equation}
+\label{eq:idealSafety}
+
+For any possible values of $x_{1}-x_{i-1},x_{i+1}-x_{n}$.
+
+Equation \ref{eq:idealSafety} can be read as ``$f$ is strict in $x_{i}$ when $f$
+fails to terminate if $x_{i}$ fails to terminate''. The reason this allows us
+to evaluate the $i$th argument before it is needed is because doing so would only result
+in introducing non-termination if the program would have resulted in non-termination
+otherwise.
+
+\subsection{Abstract Domains}
+
+Now that we have established what it means to be strict we can expand on how we
+analyse programs for this property. As with any abstract interpretation,
+this involves the choice of an abstract domain.
+
+%% Hasse diagram for the flat domain of integers.
+%%
+%% We have a horizontal 'number line' from -infity to infinity and edges from each
+%% number to _|_ which is centered below the numbers.
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+    \node [hasse, label=above:\large$0$]                (zero) at (0,0) {};
+    \node [hasse, right = of zero, label=above:\large$1$] (one)   {};
+    \node [hasse, right = of one, label=above:\large$2$]  (two)   {};
+    \node [hasse, left = of zero, label=above:\large$-1$]  (neg1)  {};
+    \node [hasse, left = of neg1, label=above:\large$-2$]  (neg2)  {};
+    \node [hasse, left = of neg2, label=above:\large$\dots$]  (ldots) {};
+    \node [hasse, right = of two, label=above:\large$\dots$]  (rdots) {};
+    \node [hasse, left = of ldots, label=above:\large$-\infty$] (nInf)  {};
+    \node [hasse, right = of rdots, label=above:\large$\infty$](inf)   {};
+
+    \node [hasse, below = of zero, label=below:\large$\bot$] (bot)   {};
+
+    \draw[black] (zero) -- (bot);
+    \draw[black] (one) -- (bot);
+    \draw[black] (two) -- (bot);
+    \draw[black] (neg1) -- (bot);
+    \draw[black] (neg2) -- (bot);
+    \draw[black] (ldots) -- (bot);
+    \draw[black] (rdots) -- (bot);
+    \draw[black] (inf) -- (bot);
+    \draw[black] (nInf) -- (bot);
+\end{tikzpicture}
+\caption{Flat Domain}
+\label{fig:flatInts}
+\end{figure}
+
+In non-strict languages types like Integers and Booleans form a flat domain;
+either we have a value of that type, or we have $\bot$. This is depicted in
+Figure \ref{fig:flatInts}. We can form an intuition of these orderings by
+thinking about how much we \emph{know} about a certain value. While the integer
+value $5$ maybe greater than the integer value $4$, we know the same amount
+about each of them: their values. However, if we have a procedure that is meant
+to compute an integer and it loops forever, we cannot know that integer's
+value. Therefore we know less about a non-terminating value.
+
+
+This fits nicely with call-by-need semantics: an argument to a function of
+type \<Int\> is really a computation that can either result in a value, or
+result in non-termination. In terms of strictness analysis, this allows us to
+abstract our real domain of Integers to the simple two-point domain shown in
+Figure \ref{fig:twoPointNice}.
+
+\begin{figure}[b]
+\centering
+\begin{tikzpicture}
+    \node [hasse, label=above:\large$\top$]                 (top) {};
+    \node [hasse, below = of top, label=below:\large$\bot$] (bot) {};
+
+    \draw[black] (top) -- (bot);
+\end{tikzpicture}
+\caption{Two-point Domain}
+\label{fig:twoPointNice}
+\end{figure}
+
+
+This is the domain we use for basic strictness analysis. The bottom of the
+lattice, $\bot$, as implied above, represents \emph{definitely non-terminating}
+expressions. The top of the lattice, $\top$, is used to represent
+\emph{potentially terminating}\footnote{Remember that program analysis must
+approximate in the general case.} expressions. This approximation can seem
+counterintuitive; why are we allowing the analysis to say some results are
+potentially terminating when they could be non-terminating? The reasoning is
+that non-terminating values do not imply a non-terminating program under
+non-strict semantics! If we approximated in the opposite direction (as analyses
+for other purposes sometimes do) we may accidentally compute a value that was
+never needed, defeating the purpose of call-by-need evaluation.
+
+
+\subsubsection{Abstracting Functions}
+
+Now that we know what it means to be strict and why we represent flat domains
+as a two-point domain the next step is to abstract the functions in our
+program. 
+
+The idea is simple: for every function in our program of type \<A\> we must
+produce a function of type \<A^{\#}\> that works on the abstracted
+values.\footnote{Some texts represent an abstracted type by a number \<N\>
+where $N$ is the number of points in the abstract domain. We prefer to retain
+the context of where this abstract domain came from.} For example, if \<A\> is
+the type \<Int \to Int \to Int\>, \<A^{\#}\> would have the abstracted type
+\<Int^{\#} \to Int^{\#} \to Int^{\#}\>.  This abstracted program is then
+interpreted using an abstract semantics that provides us with the strictness
+information for each function in our program.
+
+\begin{figure}[t]
+\centering
+\begin{minipage}{.5\textwidth}
+\begin{haskell*}
+\(\top\) \(\sqcap\) \(\top\) &=& \(\top\) \\
+\(\top\) \(\sqcap\) \(\bot\) &=& \(\bot\) \\
+\(\bot\) \(\sqcap\) \(\top\) &=& \(\bot\) \\
+\(\bot\) \(\sqcap\) \(\bot\) &=& \(\bot\)
+\end{haskell*}
+\end{minipage}
+\quad\quad
+\begin{minipage}{.5\textwidth}
+\begin{haskell*}
+\(\top\) \(\sqcup\) \(\top\) &=& \(\top\) \\
+\(\top\) \(\sqcup\) \(\bot\) &=& \(\top\) \\
+\(\bot\) \(\sqcup\) \(\top\) &=& \(\top\) \\
+\(\bot\) \(\sqcup\) \(\bot\) &=& \(\bot\)
+\end{haskell*}
+\end{minipage}
+\caption{The \emph{meet} ($\sqcap$) and \emph{join} ($\sqcup$) for our lattice}
+\label{fig:twopointMeet}
+\end{figure}
+
+While this separation of abstracting the program and then performing an
+abstract interpretation is useful from the theoretical point of view, many
+compilers skip the intermediate representation of an abstracted program and
+perform the abstract interpretation with the original AST
+\citep{hinze1995projection, kubiak, SergeyDemand}.
+
+We begin with the set of primitive arithmetic functions. In the case of F-Lite,
+each numeric primitive is strict in both arguments, providing us with the
+following for each of \<(+), (-), (*), (/)\>:
+
+\pagebreak
+
+\begin{haskell*}
+(\(\odot\)) &::& Int^{\#} \to Int^{\#} \to Int^{\#} \\
+\(\top\) \(\odot\) \(\top\) &=& \(\top\) \\
+\(\top\) \(\odot\) \(\bot\) &=& \(\bot\) \\
+\(\bot\) \(\odot\) \(\top\) &=& \(\bot\) \\
+\(\bot\) \(\odot\) \(\bot\) &=& \(\bot\)
+\end{haskell*}
+
+We must also be able to combine results from different paths in a program. This
+requires both conjunction and disjunction. We can use the \<meet\> ($\sqcap$)
+and \<join\> ($\sqcup$) from our lattice which are fully described in Figure
+\ref{fig:twopointMeet}.
+
+
+We can now define an abstract interpretation, $\mathcal{A}$, that takes
+expressions in our language and gives us their abstracted values. We require an
+environment that maps variables and functions to abstracted values, we use,
+\<\hasphi :: Env^{\#}\> to represent this environment. We write
+\<\hasphi[x \mapsto v]\> to represent extending the environment with identifier
+\<x\> being mapped to the value \<v\>. Lastly, looking up a value in the environment
+is just applying the environment to the identifier.
+
+\begin{figure}
+\begin{haskell*}
+\mathcal{A} &::& Exp \to Env^{\#} \to Exp^{\#} \\
+%
+\mathcal{A}\Sem{Var v} \hasphi &=& \hasphi v \\
+%
+\mathcal{A}\Sem{Int i} \hasphi &=& \(\top\) \\
+%
+\mathcal{A}\Sem{Con c} \hasphi &=& \(\top\) \\
+%
+\mathcal{A}\Sem{Fun f} \hasphi &=& \hasphi f\\
+%
+\mathcal{A}\Sem{App (Fun f) [a_{1}, \dots a_{n}]} \hasphi &=&
+        \mathcal{A}\Sem{f} \hasphi (\mathcal{A}\Sem{a_{1}} \hasphi) \dots
+        (\mathcal{A}\Sem{a_{n}} \hasphi)\\
+%
+\mathcal{A}\Sem{Let b_{1} = e_{1} \(\dots\) b_{n} = e_{n} in e} \hasphi &=&
+        \mathcal{A}\Sem{e} \hasphi[b_{i} \(\mapsto\) \mathcal{A}\Sem{e_{i}}] \\
+%
+\mathcal{A}\Sem{Case e alts}    \hasphi &=& \mathcal{A}\Sem{e} \hasphi
+        \(\sqcap\) \mathcal{C}\Sem{alts} \hasphi \\
+%
+\quad&\quad&\quad \\
+%
+\hsnoalign{\mathcal{C}\Sem{c_{1}\ vars_{1} \to e_{n}, \(\dots\), c_{n}\ vars_{n} \to e_{n})} \hasphi =
+        e^{\#}_{1} \(\sqcup \dots \sqcup\) e^{\#}_{n}
+        \hswhere{%
+            e^{\#}_{1} &= \mathcal{A}\Sem{e_{1}} \hasphi[vars_{1} \(\mapsto \top\)] \\
+            & \vdots \\
+            e^{\#}_{n} &= \mathcal{A}\Sem{e_{n}} \hasphi[vars_{i} \(\mapsto \top\)]
+        }
+        }
+\end{haskell*}
+\caption{An Abstract Semantics for Strictness Analysis on a Two-Point Domain}
+\label{fig:twoPointAI}
+\end{figure}
+
+%\todoinline{Fix rule C so that we take into account the vars introduced by case
+%alternatives (they should all be approximated as Top)}
+
+\subsection{Some Examples}
+
+We can now use the abstract semantics from Figure \ref{fig:twoPointAI} on some
+real functions.
+
+\subsubsection{The Constant Function:}
+
+The function \<const\> is defined as
+
+\begin{haskell*}
+const x y = x
+\end{haskell*}
+
+For non-recursive functions, like \<const\>, we can determine the strictness
+properties fully with just $n$ iterations of $\mathcal{A}$ where $n$ is the
+number of arguments to the function. We run the abstract interpretation using
+$\bot$ as the value for the argument we are currently interested in and $\top$
+for all the rest.
+
+First we analyse the body (\<x\>) in terms of \<x\>:
+\begin{haskell*}
+\mathcal{A}\Sem{x}[x \mapsto \(\bot\), y \mapsto \(\top\)] \Rightarrow \(\bot\)
+\end{haskell*}
+
+then in terms of \<y\>:
+\begin{haskell*}
+\mathcal{A}\Sem{x}[x \mapsto \(\top\), y \mapsto \(\bot\)] \Rightarrow \(\top\)
+\end{haskell*}
+
+Remembering what it means to be strict from Equation \ref{eq:idealSafety}, this
+analysis tells us that \<const\> is strict in \<x\> but not in \<y\>. This is
+exactly what we would expect.
+
+\hfill$\Box$
+
+\subsubsection{Conditional}
+
+In non-strict languages we can define our own control-flow abstractions,
+allowing what is usually a primitive, the \<if\> statement, to be defined
+naturally in the language as
+
+\begin{haskell*}
+if p t e = \hscase{p}{\\
+                      True \to t\\
+                      False \to e}
+\end{haskell*}
+
+Analysing \<if\> should determine that \<if\> is strict in \<p\>
+
+\begin{haskell*}
+\mathcal{A}\Sem{Case\ p\  [True \to t, False \to e]} \hasphi
+\hsbody{%
+    \quad& \Rightarrow \mathcal{A}\Sem{p} \hasphi \(\sqcap\)
+        (\mathcal{A}\Sem{t} \hasphi \(\sqcup\)
+         \mathcal{A}\Sem{e} \hasphi)\\
+    \quad& \Rightarrow \(\bot \sqcap (\top \sqcup \top)\)\\
+    \quad& \Rightarrow \(\bot\)
+}
+\hswhere{%
+\quad \hasphi = [p \mapsto \(\bot\),t \mapsto \(\top\), e \mapsto \(\top\)]
+}
+\end{haskell*}
+
+This shows how the use of \<meet\> and \<join\> are used to combine the
+results from the different branches of the function. Because the discriminant
+of a \<Case\> expression is always evaluated to WHNF, a non-terminating
+discriminant results in a non-terminating function.
+
+Notice that if we analysed the second two arguments to \<if\> then we would
+have seen that they are not strict for \<if\> because only one would be $\bot$
+at a given time and \<meet\> ($\sqcup$) only results in bottom if both arguments
+are bottom.
+
+
+\hfill$\Box$
+
+\subsubsection{Calling Abstract Functions}
+
+Calling functions in the abstract interpretation is the same as a function call
+in the standard interpretation except that the target of the call is the
+abstracted function. Dependency analysis is used to ensure that callees are
+analysed before their callers.\footnote{This also identifies mutually recursive
+groups, which we explain next.} The following example illustrates calling
+functions and the fact that the abstraction of \<Case\> is capable of
+determining when an argument is needed in all the branches.
+
+
+\begin{haskell*}
+addOrConst b x y = \hscase{b}{\\
+    True \to x + y\\
+    False \to x
+    }
+\end{haskell*}
+
+The analysis for the second argument proceeds as follows
+
+\begin{haskell*}
+\mathcal{A}\Sem{Case\ b\  [True \to x + y, False \to x]} \hasphi
+\hsbody{%
+    \quad& \Rightarrow \mathcal{A}\Sem{b} \hasphi \(\sqcap\)
+        (\mathcal{A}\Sem{x + y} \hasphi \(\sqcup\)
+         \mathcal{A}\Sem{x} \hasphi)\\
+    \quad& \Rightarrow \(\top\) \(\sqcap\)
+        (\mathcal{A}\Sem{x + y} \hasphi \(\sqcup\)
+         \mathcal{A}\Sem{x} \hasphi)\\
+    \quad& \Rightarrow \(\top\) \(\sqcap\)
+        ((\mathcal{A}\Sem{+} \hasphi (\mathcal{A}\Sem{x} \hasphi) (\mathcal{A}\Sem{y} \hasphi)) \(\sqcup\)
+         \(\top\))\\
+    \quad& \Rightarrow \(\top\) \(\sqcap\)
+        ((+^{\#} \(\bot\) \(\top\)) \(\sqcup\)
+         \(\top\))\\
+    \quad& \Rightarrow \(\top \sqcap (\bot \sqcup \top)\)\\
+    \quad& \Rightarrow \(\bot\)
+}
+\hswhere{%
+\quad \hasphi = [b \mapsto \(\top\),x \mapsto \(\bot\), y \mapsto \(\top\)]
+}
+\end{haskell*}
+
+The other language constructs are interpreted similarly. Do note that we do not
+attempt to analyse functions with free variables. Instead we take advantage of
+lambda-lifting in order to remove nested functions to the top level. We are not
+the first to use lambda lifting in order to avoid this problem
+\citep{clack1985strictness}. Luckily, lambda lifting is done regardless for
+compilation to the $G$-Machine.
+
+\hfill$\Box$
+
+
+\subsubsection{Recursive Functions}
+
+Our last concern is with recursive functions. We use the fact that recursive
+abstract functions are just recursive functions on a different domain. This
+allows us to define a recursive function as the least upper bound of successive
+approximations of the function, i.e. an \emph{ascending Kleene chain} (AKC).
+
+We calculate this by starting with the `bottom' approximation where all sets of
+inputs are mapped to $\bot$. For a function $f$ we call this $f^{\#0}$. We then
+calculate $f^{\#n}$ by replacing each call to $f$ with $f^{\#(n - 1)}$. This
+series of successive approximations forms the AKC.
+
+So for a function of the form
+
+\begin{haskell*}
+f x_{1} \dots x_{m} = \hsinf{body of \<f\> which includes a call to \<f\>}
+\end{haskell*}
+
+We generate the following AKC
+
+\begin{haskell*}
+f^{\#0} x_{1} \dots x_{m} &=& \(\bot\) \\
+f^{\#1} x_{1} \dots x_{m} &=& \hsinf{body of \<f\> with call to \<f^{\#0}\>} \\
+f^{\#2} x_{1} \dots x_{m} &=& \hsinf{body of \<f\> with call to \<f^{\#1}\>} \\
+f^{\#3} x_{1} \dots x_{m} &=& \hsinf{body of \<f\> with call to \<f^{\#2}\>} \\
+\quad &\vdots& \quad \\
+f^{\#n} x_{1} \dots x_{m} &=& \hsinf{body of \<f\> with call to \<f^{\#(n - 1)}\>}
+\end{haskell*}
+
+We can stop the calculation of this AKC when $f^{\#n} \equiv f^{\#(n - 1)}$ for
+\emph{all combinations} of $x_{1}$ to $x_{m}$. This means that for each iteration
+of the AKC we must interpret $f$ $2^m$ times!
+
+Fortunately, there are clever ways of avoiding much of this expense for typical
+cases. Clack and Peyton Jones developed an algorithm for the efficient
+calculation of an AKC \citep{clack1985strictness}.
+
+\hfill$\Box$
+
+\subsubsection{Discussion of Two-Point Strictness Analysis}
+
+We have now seen how to use semantic function $\mathcal{A}$ from Figure
+\ref{fig:twoPointAI} to analyse functions in our programs. Now we can see how
+the results help us in our ultimate aim of implicit parallelism. For this
+discussion we will forget that parallelism is not always beneficial and focus
+on how we would utilise all possible parallelism.
+
+Imagine we have a function $f$ with a call to $g$ in its body.
+
+\begin{haskell*}
+f \dots = \dots g e_{1} e_{2} e_{3} \dots
+\end{haskell*}
+
+Our analysis may determine that $g$ is strict in its first two arguments,
+providing us with an opportunity for parallelism. This would allow us
+to safely rewrite $f$ as the following
+
+\begin{haskell*}
+f \dots = \dots \hslet{x &= e_{1}\\
+                       y &= e_{2}
+                       }{%
+                       x `par` y `par` g x y e_{3} \dots
+                       }
+\end{haskell*}
+
+The expressions $e_{1}$ and $e_{2}$ are bound to the names $x$ and $y$
+in a \<let\> expression so that the results of parallel evaluation are
+shared with the body of $g$.
+
+As mentioned above, the two-point domain informs us about strictness up to
+WHNF. So if $e_{1}$ or $e_{2}$ are values from a flat domain, this
+transformation will provide all the benefits possible to $g$.\footnote{Again,
+ignoring the fact that it may not actually be a positive benefit.} But what if
+these arguments are of a non-flat type, like pairs or lists?
+
+Because we aim for safe parallelism, we cannot evaluate $e_{1}$ or $e_{2}$ any
+further than WHNF, already eliminating a vast quantity of potential parallelism.
+Take the function \<sum\> for example:
+
+\begin{haskell*}
+f \dots = \dots \hslet{xs &= e_{1}
+                       }{%
+                       xs `par` sum xs \dots
+                       }
+\end{haskell*}
+
+When a programmer wants to express this idiom in their code they often use
+\emph{parallel strategies} as illustrated in Section \ref{sec:Approaches}.
+This allows the programmer to write an expression similar to \<xs `using`
+parList\>. This forces the evaluation of the list beyond WHNF. Because our
+two-point domain does not guarantee the safety of evaluating beyond WHNF we are
+not able to use a strategy like \<parList\>. This means that even though we
+`know' that \<sum\> requires the list fully, the analysis has no way to
+represent this, and can only determine that the outermost constructor is
+needed!
+
+Because of this shortcoming, strictness analysis in this form is inappropriate
+for discovering the parallelism in a program that uses arbitrary algebraic data
+structures (e.g. lists or trees). In the next section we will see how this
+deficiency is overcome by choosing suitable domains for non-flat structures.
+
+%
+%data Exp &=& App Exp [Exp] \\ &|& Case Exp [Alt] \\ &|& Let [Binding] Exp \\
+%&|& Fun Id \\
