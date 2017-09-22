@@ -31,10 +31,9 @@ syntactic sugar for pairs (and other $N$-tuples): \<(\hasalpha,\hasbeta)\>.
 A first try at representing pairs of values from the two-point domain could
 give us the lattice in Figure \ref{fig:unboxedPairs}.
 
-\captionsetup[figure]{format=fnoline}
 \begin{figure}
 \centering
-\begin{subfigure}{0.4\textwidth}
+\subfloat[Unlifted Pairs]{
 \begin{tikzpicture}
     \node [center] (cent) {};
     \node [hasse, above = of cent, label=above:{\large\<(\(\top\),\(\top\))\>}]  (top)   {};
@@ -47,11 +46,9 @@ give us the lattice in Figure \ref{fig:unboxedPairs}.
     \draw[black] (right) -- (bot);
     \draw[black] (left) -- (bot);
 \end{tikzpicture}
-\caption{Unlifted Pairs}
-\label{fig:unboxedPairs}
-\end{subfigure}
+}
 \hfill
-\begin{subfigure}{0.4\textwidth}
+\subfloat[Lifted Pairs]{
 \begin{tikzpicture}
     \node [center] (cent) {};
     \node [hasse, above = of cent, label=above:{\large\<(\(\top\),\(\top\))\>}]  (top)   {};
@@ -66,13 +63,10 @@ give us the lattice in Figure \ref{fig:unboxedPairs}.
     \draw[black] (left) -- (bot);
     \draw[black] (bot) -- (Bot);
 \end{tikzpicture}
-\caption{Lifted Pairs}
-\label{fig:boxedPairs}
-\end{subfigure}
+}
 \caption{Domain for pairs of flat-domain values}
 \hrulefill
 \end{figure}
-\captionsetup[figure]{format=myformat}
 
 The meaning of this lattice is fairly intuitive. When we possess a pair of
 flat-domain values there are four possibilities, we can have

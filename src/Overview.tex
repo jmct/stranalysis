@@ -70,10 +70,15 @@ non-termination anyway.
 F-Lite has two primitives for taking advantage of strictness information: $par$
 and $seq$, as shown in Figure \ref{fig:seqandpar}.
 \begin{figure}
-\begin{tabular}{lll}
-    &seq \ :: \ a \rightarrow b \rightarrow b &&par \ :: \ a \rightarrow b \rightarrow b \\
-    &seq \ x \ y = y                          &&par \ x \ y = y
-\end{tabular}
+\figrule
+\programmath
+\[
+\begin{array}{lll}
+    &seq \ :: \ a \rightarrow b \rightarrow b &par \ :: \ a \rightarrow b \rightarrow b \\
+    &seq \ x \ y = y                          &par \ x \ y = y
+\end{array}
+\]
+\unprogrammath
 \caption[Semantics of \texttt{seq} and \texttt{par}.]{Semantics (but not the pragmatics) of \texttt{seq} and \texttt{par}.}
 \label{fig:seqandpar}
 \end{figure}
@@ -126,15 +131,15 @@ Take the following example function and value definitions in F-Lite
 \smallskip
 
 \begin{centering}
-\begin{BVerbatim}[commandchars=\\\{\}, codes={\catcode`$=3}]
+\begin{verbatim}
 length []     = 0                   sum []     = 0
 length (x:xs) = 1 + length xs       sum (x:xs) = x + sum xs
 
 definedList = [1,2,3,4]             infiniteList = [1,2,3...
 
 partialList = [1,2,$\bot$,4]           loop = loop
-\end{BVerbatim}
-\end{centering}\\
+\end{verbatim}
+\end{centering}
 
 Both \verb-length- and \verb-sum- are functions on lists, but they use lists
 differently. \verb-length- does not use the elements of its argument list.
